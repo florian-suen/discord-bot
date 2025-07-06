@@ -1,0 +1,63 @@
+/DiscordBot.sln
+/DiscordBot/appsettings.json
+.idea/
+*.sln.iml
+*.DotSettings
+*.DotSettings.user
+
+### User-specific files ###
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+### Build results ###
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]inaries/
+*.msi
+*.nupkg
+*.pdb
+*.cache
+
+### NuGet ###
+[Nn]u[Gg]et/
+*.nupkg
+nuget.exe
+packages/
+
+### Local dotnet tools ###
+.dotnet/
+
+ 
+### ReSharper ###
+_ReSharper.*/
+*.ReSharper
+*.resharper
+
+### MSTest ###
+TestResults/
+*.trx
+
+### Coverage ###
+*.coverage
+coverage*.xml
+
+### Other ###
+*.log
+*.tmp
+*.TMP
+*.bak
+*.swp
+*.swo
+*~
+~$*
+.DS_Store
+Thumbs.db
