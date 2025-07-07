@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using DISCORD_BOT.injections;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
@@ -9,11 +10,11 @@ namespace DISCORD_BOT;
 
 public class Program
 {
-  
     private static async Task Main(string[] args)
     {
         var builder = Host.CreateApplicationBuilder(args);
         builder.Services.AddSingleton<IVoiceStateService, VoiceStateService>();
+        builder.Services.AddSingleton<CreateStream>();
         builder.Services
             .AddDiscordGateway(options =>
             {
@@ -25,13 +26,11 @@ public class Program
                                   | GatewayIntents.Guilds | GatewayIntents.GuildEmojisAndStickers
                                   | GatewayIntents.GuildVoiceStates;
             }).AddGatewayHandlers(typeof(Program).Assembly).AddApplicationCommands()
-        ;
+            ;
         var host = builder.Build();
-       
+
         host.AddModules(typeof(Program).Assembly);
         host.UseGatewayHandlers();
         await host.RunAsync();
     }
 }
-
- 
