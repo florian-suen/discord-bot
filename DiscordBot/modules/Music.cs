@@ -36,7 +36,7 @@ public class Music(IVoiceStateService voiceStateService, CreateStream createStre
     {
         if (!Uri.IsWellFormedUriString(track, UriKind.Absolute))
         {
-            await RespondAsync(InteractionCallback.Message("Invalid track! I only accept Youtube!"));
+            await RespondAsync(InteractionCallback.Message("Invalid track!"));
             return;
         }
 
@@ -70,9 +70,15 @@ public class Music(IVoiceStateService voiceStateService, CreateStream createStre
         VoiceClient? voiceClient = null;
 
         if (_voiceStateService.VoiceStates.TryGetValue(guild.Id, out var voice) == false)
+        {
             voiceClient = await InitializeVoiceClient(client, guild.Id, voiceState);
+        }
         else
+        {
             voiceClient = voice;
+            await createStream.CloseAsync(guild.Id);
+        }
+
 
         await RespondAsync(InteractionCallback.Message($"Playing {Path.GetFileName(track)}!"));
         await createStream.StartStream(voiceClient, guild.Id, track);

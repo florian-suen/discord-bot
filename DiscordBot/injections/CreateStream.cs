@@ -8,33 +8,33 @@ public class CreateStream(IVoiceStateService voiceStateService)
     public required Task? CancellationToken;
     public required Process? Ffmpeg;
     public required Stream? OutStream;
+    public required CancellationTokenSource Source;
     public required OpusEncodeStream? Stream;
+    public required CancellationToken Token;
     public required Process? YtDlpProcess;
 
-    private async Task CloseAsync(ulong guildId)
+    public async Task CloseAsync(ulong guildId)
     {
         if (Ffmpeg is not null && Stream is not null && YtDlpProcess is not null && OutStream is not null)
         {
-            await OutStream.FlushAsync();
-            YtDlpProcess.Close();
-            Ffmpeg.Kill();
-            await Stream.FlushAsync();
-            if (voiceStateService.VoiceStates.TryGetValue(guildId, out var voiceClient)) voiceClient.Dispose();
+            await Source.CancelAsync();
+            await Stream.FlushAsync(Token);
             await Stream.DisposeAsync();
+            await OutStream.FlushAsync(Token);
+            YtDlpProcess.Dispose();
+            Ffmpeg.Dispose();
+            Source.Dispose();
         }
     }
 
 
     public async Task StartStream(VoiceClient voiceClient, ulong guildId, string track)
     {
-        await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
-        OutStream ??= voiceClient.CreateOutputStream();
+        Source = new CancellationTokenSource();
+        Token = Source.Token;
+        await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone), null, Token);
 
-        if (Stream is not null)
-        {
-            await Stream.DisposeAsync();
-            Stream = null;
-        }
+        OutStream ??= voiceClient.CreateOutputStream();
 
         Stream = new OpusEncodeStream(OutStream, PcmFormat.Short, VoiceChannels.Stereo, OpusApplication.Audio);
 
@@ -85,10 +85,10 @@ public class CreateStream(IVoiceStateService voiceStateService)
         Ffmpeg = Process.Start(startInfo)!;
 
 
-        var pipeTask = YtDlpProcess.StandardOutput.BaseStream.CopyToAsync(Ffmpeg.StandardInput.BaseStream)
-            .ContinueWith(_ => Ffmpeg.StandardInput.Close());
+        var pipeTask = YtDlpProcess.StandardOutput.BaseStream.CopyToAsync(Ffmpeg.StandardInput.BaseStream, Token)
+            .ContinueWith(_ => Ffmpeg.StandardInput.Close(), Token);
 
-        await Ffmpeg.StandardOutput.BaseStream.CopyToAsync(Stream);
+        await Ffmpeg.StandardOutput.BaseStream.CopyToAsync(Stream, Token);
         await pipeTask;
 
 
