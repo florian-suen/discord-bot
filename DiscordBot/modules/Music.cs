@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using NetCord;
+using NetCord.Gateway;
 using NetCord.Gateway.Voice;
 using NetCord.Logging;
 using NetCord.Rest;
@@ -7,11 +8,49 @@ using NetCord.Services.ApplicationCommands;
 
 namespace DISCORD_BOT.modules;
 
-public class Music : ApplicationCommandModule<ApplicationCommandContext>
+public class Music(IVoiceStateService voiceStateService) : ApplicationCommandModule<ApplicationCommandContext>
 {
+    
+    
+    private readonly IVoiceStateService _voiceStateService = voiceStateService;
+    public required Process? Ffmpeg;
+    public required OpusEncodeStream? Stream;
+
+
+
+    private async Task<VoiceClient> InitializeVoiceClient(GatewayClient client,ulong guildId,VoiceState voiceState) {
+        
+         var voiceClient =  await client.JoinVoiceChannelAsync(
+                guildId,
+            voiceState.ChannelId.GetValueOrDefault(),
+            new VoiceClientConfiguration
+            {
+                Logger = new ConsoleLogger()
+            }); 
+            await voiceClient!.StartAsync();
+
+            _voiceStateService.VoiceStates.TryAdd(guildId, voiceClient);
+
+            return voiceClient;
+
+    }
+
+    private async Task CloseAsync(ulong guildId)
+    {
+        if (Ffmpeg is not null && Stream is not null)
+        {
+            Ffmpeg.Kill();
+            await Stream.FlushAsync();
+            if(_voiceStateService.VoiceStates.TryGetValue(guildId,out var voiceClient)) voiceClient.Dispose();;
+            
+            await Stream.DisposeAsync();
+        }
+    }
+    
     [SlashCommand("play", "Plays music", Contexts = [InteractionContextType.Guild])]
     public async Task PlayAsync(string track)
     {
+        
         if (!Uri.IsWellFormedUriString(track, UriKind.Absolute))
         {
             await RespondAsync(InteractionCallback.Message("Invalid track! I only accept Youtube!"));
@@ -45,30 +84,20 @@ public class Music : ApplicationCommandModule<ApplicationCommandContext>
         }
 
         var client = Context.Client;
-
-
-        var voiceClient = await client.JoinVoiceChannelAsync(
-            guild.Id,
-            voiceState.ChannelId.GetValueOrDefault(),
-            new VoiceClientConfiguration
-            {
-                Logger = new ConsoleLogger()
-            });
-
-
-        await voiceClient.StartAsync();
-
-
+        VoiceClient? voiceClient = null;
+       Console.Write(_voiceStateService.VoiceStates.TryGetValue(guild.Id,out var voicsde));
+       if (_voiceStateService.VoiceStates.TryGetValue(guild.Id, out var voice) == false)
+           voiceClient = await InitializeVoiceClient(client, guild.Id, voiceState);
+       else voiceClient = voice;
+       
+       if (voiceClient is null) return;
+        
         await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
-
-
         await RespondAsync(InteractionCallback.Message($"Playing {Path.GetFileName(track)}!"));
-
-
+ 
+        
         var outStream = voiceClient.CreateOutputStream();
-
-
-        OpusEncodeStream stream = new(outStream, PcmFormat.Short, VoiceChannels.Stereo, OpusApplication.Audio);
+        Stream = new(outStream, PcmFormat.Short, VoiceChannels.Stereo, OpusApplication.Audio);
 
 
         ProcessStartInfo ytDlpStartInfo = new("yt-dlp")
@@ -114,22 +143,23 @@ public class Music : ApplicationCommandModule<ApplicationCommandContext>
         arguments.Add("pipe:1");
 
         var ytDlpProcess = Process.Start(ytDlpStartInfo)!;
-        var ffmpeg = Process.Start(startInfo)!;
+          Ffmpeg = Process.Start(startInfo)!;
 
 
-        var pipeTask = ytDlpProcess.StandardOutput.BaseStream.CopyToAsync(ffmpeg.StandardInput.BaseStream)
-            .ContinueWith(_ => ffmpeg.StandardInput.Close());
+        var pipeTask = ytDlpProcess.StandardOutput.BaseStream.CopyToAsync(Ffmpeg.StandardInput.BaseStream)
+            .ContinueWith(_ => Ffmpeg.StandardInput.Close());
 
-        await ffmpeg.StandardOutput.BaseStream.CopyToAsync(stream);
-
+        await Ffmpeg.StandardOutput.BaseStream.CopyToAsync(Stream);
         await pipeTask;
-
-        await stream.FlushAsync();
-
+        
         ytDlpProcess.Close();
-        ffmpeg.Close();
+        await CloseAsync(guild.Id);
     }
 
+    
+    
+    
+    
 
     [SlashCommand("echo", "Creates echo", Contexts = [InteractionContextType.Guild])]
     public async Task<string> EchoAsync()
@@ -137,15 +167,13 @@ public class Music : ApplicationCommandModule<ApplicationCommandContext>
         var guild = Context.Guild!;
         var userId = Context.User.Id;
 
-        // Get the user voice state
+     
         if (!guild.VoiceStates.TryGetValue(userId, out var voiceState))
             return "You are not connected to any voice channel!";
 
         var client = Context.Client;
 
-        // You should check if the bot is already connected to the voice channel.
-        // If so, you should use an existing 'VoiceClient' instance instead of creating a new one.
-        // You also need to add a synchronization here. 'JoinVoiceChannelAsync' should not be used concurrently for the same guild
+     
         var voiceClient = await client.JoinVoiceChannelAsync(
             guild.Id,
             voiceState.ChannelId.GetValueOrDefault(),
@@ -155,24 +183,24 @@ public class Music : ApplicationCommandModule<ApplicationCommandContext>
                 Logger = new ConsoleLogger()
             });
 
-        // Connect
+ 
         await voiceClient.StartAsync();
 
-        // Enter speaking state, to be able to send voice
+ 
         await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
 
-        // Create a stream that sends voice to Discord
+ 
         var outStream = voiceClient.CreateOutputStream(false);
 
         voiceClient.VoiceReceive += args =>
         {
-            // Pass current user voice directly to the output to create echo
+           
             if (voiceClient.Cache.Users.TryGetValue(args.Ssrc, out var voiceUserId) && voiceUserId == userId)
                 outStream.Write(args.Frame);
             return default;
         };
 
-        // Return the response
+   
         return "Echo!";
     }
 }
