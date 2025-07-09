@@ -70,60 +70,10 @@ public class Music(IVoiceStateService voiceStateService, CreateStream createStre
         VoiceClient? voiceClient = null;
 
         if (_voiceStateService.VoiceStates.TryGetValue(guild.Id, out var voice) == false)
-        {
             voiceClient = await InitializeVoiceClient(client, guild.Id, voiceState);
-        }
         else
-        {
             voiceClient = voice;
-            await createStream.CloseAsync(guild.Id);
-        }
-
-
         await RespondAsync(InteractionCallback.Message($"Playing {Path.GetFileName(track)}!"));
         await createStream.StartStream(voiceClient, guild.Id, track);
-    }
-
-
-    [SlashCommand("echo", "Creates echo", Contexts = [InteractionContextType.Guild])]
-    public async Task<string> EchoAsync()
-    {
-        var guild = Context.Guild!;
-        var userId = Context.User.Id;
-
-
-        if (!guild.VoiceStates.TryGetValue(userId, out var voiceState))
-            return "You are not connected to any voice channel!";
-
-        var client = Context.Client;
-
-
-        var voiceClient = await client.JoinVoiceChannelAsync(
-            guild.Id,
-            voiceState.ChannelId.GetValueOrDefault(),
-            new VoiceClientConfiguration
-            {
-                ReceiveHandler = new VoiceReceiveHandler(), // Required to receive voice
-                Logger = new ConsoleLogger()
-            });
-
-
-        await voiceClient.StartAsync();
-
-
-        await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
-
-
-        var outStream = voiceClient.CreateOutputStream(false);
-
-        voiceClient.VoiceReceive += args =>
-        {
-            if (voiceClient.Cache.Users.TryGetValue(args.Ssrc, out var voiceUserId) && voiceUserId == userId)
-                outStream.Write(args.Frame);
-            return default;
-        };
-
-
-        return "Echo!";
     }
 }
