@@ -4,6 +4,7 @@ using NetCord.Gateway.Voice;
 
 namespace DISCORD_BOT.injections;
 
+//currently only works for one guild one bot but ideally with guildId/dictionary for each class instance
 public class CreateStream(IVoiceStateService voiceStateService)
 {
     public required bool Active;
@@ -16,7 +17,7 @@ public class CreateStream(IVoiceStateService voiceStateService)
     public required Process? YtDlpProcess;
 
 
-    private async Task CloseAsync(ulong guildId)
+    public async Task CloseAsync()
     {
         if (Active && Ffmpeg is not null && Stream is not null && YtDlpProcess is not null && OutStream is not null &&
             Source is not null)
@@ -89,14 +90,14 @@ public class CreateStream(IVoiceStateService voiceStateService)
 
     public async Task StartStream(VoiceClient voiceClient, ulong guildId, string track)
     {
-        await CloseAsync(guildId);
+        await CloseAsync();
 
         Active = true;
         Source = new CancellationTokenSource();
         Token = Source.Token;
         if (SpeakingState == false)
         {
-            await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
+            await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone), null, Token);
             SpeakingState = true;
         }
 
@@ -173,7 +174,7 @@ public class CreateStream(IVoiceStateService voiceStateService)
             var ffmpegOutputTask = Ffmpeg.StandardOutput.BaseStream.CopyToAsync(Stream, Token);
             await Task.WhenAny(
                 ffmpegOutputTask,
-                Ffmpeg.WaitForExitAsync()
+                Ffmpeg.WaitForExitAsync(Token)
             );
 
             if (Ffmpeg.HasExited && Ffmpeg.ExitCode != 0)
@@ -181,7 +182,6 @@ public class CreateStream(IVoiceStateService voiceStateService)
 
 
             await pipeTask;
-            Console.Write("IT HAS COMPLETED");
         }
         catch (TaskCanceledException e)
         {
@@ -194,7 +194,7 @@ public class CreateStream(IVoiceStateService voiceStateService)
         }
         finally
         {
-            if (Token.IsCancellationRequested == false) await CloseAsync(guildId);
+            if (Token.IsCancellationRequested == false) await CloseAsync();
         }
     }
 }

@@ -3,7 +3,7 @@ using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using NetCord.Rest;
 
-namespace DISCORD_BOT;
+namespace Discord_Bot.events;
 
 public class MessageCreateHandler(RestClient client, ILogger<MessageCreateHandler> logger)
     : IMessageCreateGatewayHandler

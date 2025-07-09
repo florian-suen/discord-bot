@@ -73,6 +73,8 @@ public class Music(IVoiceStateService voiceStateService, CreateStream createStre
             voiceClient = await InitializeVoiceClient(client, guild.Id, voiceState);
         else
             voiceClient = voice;
+
+
         await RespondAsync(InteractionCallback.Message($"Playing {Path.GetFileName(track)}!"));
         await createStream.StartStream(voiceClient, guild.Id, track);
     }
