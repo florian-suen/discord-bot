@@ -298,7 +298,7 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
     public class MusicQueue
     {
         private readonly Random _rng = new();
-        private readonly LinkedList<(string, string)> _trackList = new();
+        private readonly LinkedList<(string title, string url)> _trackList = new();
         private LinkedListNode<(string title, string url)>? _currentNode;
 
 
@@ -425,15 +425,37 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
 
         public bool Remove(int index)
         {
-            if (index < 0 || index >= _trackList?.Count)
+            //One update to make is when title is still loading and someone removes in succession
+
+            try
+            {
+                if (index < 0 || index >= _trackList?.Count)
+                    return false;
+
+                var currentNode = _trackList?.First;
+
+                for (var i = 0; i < index; i++) currentNode = currentNode?.Next;
+
+                if (currentNode is not null) _trackList?.Remove(currentNode);
+
+                var newTrackNumber = 1;
+                var currentNodeToMutate = _trackList?.First;
+                while (currentNodeToMutate is not null)
+                {
+                    var splitName = currentNodeToMutate.Value.title.Split('-', 2)[1];
+                    var url = currentNodeToMutate.Value.url;
+                    currentNodeToMutate.Value = ($"Track {newTrackNumber} - {splitName}", url);
+                    newTrackNumber++;
+                    currentNodeToMutate = currentNodeToMutate.Next;
+                }
+
+                return true;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"Error Removing - {e.Message}");
                 return false;
-
-            var currentNode = _trackList?.First;
-
-            for (var i = 0; i < index; i++) currentNode = currentNode?.Next;
-
-            if (currentNode is not null) _trackList?.Remove(currentNode);
-            return true;
+            }
         }
 
         public bool SkipTo(int index)

@@ -116,7 +116,9 @@ public class Music(IVoiceStateService voiceStateService, MusicStream musicStream
     {
         var success = musicStream.MusicTracks().Remove(index - 1);
         if (success) await RespondAsync(InteractionCallback.Message("Removed track from queue!"));
-        else await RespondAsync(InteractionCallback.Message("Couldn't find track"));
+        else
+            await RespondAsync(InteractionCallback.Message(
+                "Couldn't find track. You may be removing a track whilst another is being added. Please Try again."));
     }
 
     [SlashCommand("clear", "clear all tracks", Contexts = [InteractionContextType.Guild])]
