@@ -5,7 +5,7 @@ using NetCord.Hosting.Gateway;
 
 namespace Discord_Bot.events;
 
-public class VoiceEvent(GatewayClient gatewayClient, IVoiceStateService voiceStateService, CreateStream createStream)
+public class VoiceEvent(GatewayClient gatewayClient, IVoiceStateService voiceStateService, MusicStream musicStream)
     : IVoiceStateUpdateGatewayHandler
 {
     public async ValueTask HandleAsync(VoiceState arg)
@@ -21,9 +21,10 @@ public class VoiceEvent(GatewayClient gatewayClient, IVoiceStateService voiceSta
             if (removedVoiceClient is not null) await removedVoiceClient.CloseAsync();
             var voiceProperties = new VoiceStateProperties(arg.GuildId, null);
             await gatewayClient.UpdateVoiceStateAsync(voiceProperties);
-            createStream.SpeakingState = false;
-            createStream.OutStream = null;
-            await createStream.CloseAsync();
+            musicStream.SpeakingState = false;
+            musicStream.OutStream = null;
+            musicStream.MusicTracks().Clear();
+            await musicStream.CloseAsync();
         }
     }
 }
