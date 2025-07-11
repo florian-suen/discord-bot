@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using NetCord;
+using NetCord.Gateway;
 using NetCord.Gateway.Voice;
 using NetCord.Rest;
 
@@ -7,10 +9,11 @@ namespace DISCORD_BOT.injections;
 
 //currently only works for one guild one bot but ideally with guildId/dictionary for each guild instance
 //Update Music Stream to store guild ids for each process
-public class MusicStream(IVoiceStateService voiceStateService, RestClient restClient)
+public class MusicStream(IVoiceStateService voiceStateService, RestClient restClient, GatewayClient gatewayClient)
 {
     private readonly MusicQueue _musicTrack = new();
     public required bool Active;
+    public required int? CurrentIndex;
     public required Process? Ffmpeg;
     public required Stream? OutStream;
     public required CancellationTokenSource? Source;
@@ -18,7 +21,6 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
     public required OpusEncodeStream? Stream;
     public required CancellationToken Token;
     public required Process? YtDlpProcess;
-
 
     public MusicQueue MusicTracks()
     {
@@ -44,14 +46,59 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
 
     private async Task Play(ulong channelId)
     {
-        while (_musicTrack?.Next() != null)
+        if (_musicTrack?.Next() is null && _musicTrack?.Current is not null)
         {
             var currentTrack = _musicTrack?.Current;
-            await restClient.SendMessageAsync(channelId, $"Currently Playing {currentTrack}");
-            if (currentTrack is not null)
-            {
-                var stream = await _streamTask(currentTrack);
+            CurrentIndex = _musicTrack!.CurrentIndex;
+            var activityName = currentTrack!.Value.title.Contains("...Loading")
+                ? "some rock & roll!"
+                : currentTrack!.Value.title.Substring(10);
 
+
+            var presence = new PresenceProperties(UserStatusType.DoNotDisturb)
+            {
+                Activities =
+                [
+                    new UserActivityProperties(activityName, UserActivityType.Listening)
+                    {
+                        State = "Your Lord is playing some music!"
+                    }
+                ]
+            };
+            await gatewayClient.UpdatePresenceAsync(presence);
+            await restClient.SendMessageAsync(channelId, $"Currently Playing {currentTrack.Value.url}",
+                cancellationToken: Token);
+            await _streamTask(currentTrack.Value.url);
+        }
+
+
+        else
+        {
+            while (_musicTrack?.Next() != null)
+            {
+                var currentTrack = _musicTrack?.Current;
+
+                var activityName = currentTrack!.Value.title.Contains("...Loading")
+                    ? "some rock & roll!"
+                    : currentTrack!.Value.title.Substring(10);
+
+
+                var presence = new PresenceProperties(UserStatusType.DoNotDisturb)
+                {
+                    Activities =
+                    [
+                        new UserActivityProperties(activityName, UserActivityType.Listening)
+                        {
+                            State = "Your Lord is playing some music!"
+                        }
+                    ]
+                };
+                await gatewayClient.UpdatePresenceAsync(presence);
+
+
+                if (currentTrack is not ({ } title, { } url)) continue;
+                await restClient.SendMessageAsync(channelId, $"Currently Playing {url}", cancellationToken: Token);
+                var stream = await _streamTask(url);
                 if (stream == false) break;
             }
         }
@@ -75,6 +122,20 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
             Active = false;
             Source.Dispose();
             Source = null;
+
+
+            var closePresence = new PresenceProperties(UserStatusType.Online)
+            {
+                Activities =
+                [
+                    new UserActivityProperties("Idling", UserActivityType.Custom)
+                    {
+                        State = "Your friendly neighbourhood Shiba"
+                    }
+                ]
+            };
+            await gatewayClient.UpdatePresenceAsync(closePresence);
+
 
             return true;
         }
@@ -237,29 +298,74 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
     public class MusicQueue
     {
         private readonly Random _rng = new();
-        private readonly LinkedList<string> _trackList = new();
-        private LinkedListNode<string>? _currentNode;
+        private readonly LinkedList<(string, string)> _trackList = new();
+        private LinkedListNode<(string title, string url)>? _currentNode;
 
 
-        public string? Current => _currentNode?.Value;
+        public (string title, string url)? Current => _currentNode?.Value;
 
+        public int CurrentIndex => _currentNode is null ? -1 : GetTrackIndex(_currentNode);
 
         public bool IsEmpty => _trackList.Count == 0;
         public int Count => _trackList.Count;
 
 
+        private async Task FetchModifyNodeTitle(string track, LinkedListNode<(string, string)> node)
+        {
+            var ytdlp = new ProcessStartInfo("yt-dlp")
+            {
+                RedirectStandardError = true,
+                Arguments = $"--get-title {track}",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true
+            };
+
+
+            using var process = Process.Start(ytdlp);
+            var output = await process?.StandardOutput.ReadToEndAsync()!;
+
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                var error = await process.StandardError.ReadToEndAsync();
+                Console.WriteLine($"Process error: {error}");
+                throw new Exception(error);
+            }
+
+            ;
+
+            var index = GetTrackIndex(node);
+            var title = $"Track {index} - {output}";
+            node.Value = (title, track);
+        }
+
+
         public void Enqueue(string track)
         {
-            _trackList.AddLast(track);
+            var index = _trackList.Count + 1;
+            var title = $"Track {index} ...Loading";
+
+            var node = _trackList.AddLast((title, track));
+
+            _ = FetchModifyNodeTitle(track, node);
         }
 
         public void EnqueueRange(IEnumerable<string> tracks)
         {
             foreach (var track in tracks)
-                _trackList.AddLast(track);
+            {
+                var index = _trackList.Count + 1;
+                var title = $"Track {index} ...Loading";
+
+                var node = _trackList.AddLast((title, track));
+
+                _ = FetchModifyNodeTitle(track, node);
+            }
         }
 
-        public string? Next()
+        public (string, string)? Next()
         {
             if (_currentNode == null)
             {
@@ -280,24 +386,26 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
             {
                 if (IsEmpty) return false;
                 _currentNode = _trackList.First;
+                return true;
             }
 
-            if (_currentNode?.Next == null) return false;
-
-            return true;
+            return _currentNode?.Next != null;
         }
 
 
         public bool HasPrevious()
         {
-            if (_currentNode == null) return false;
+            if (_currentNode == null)
+            {
+                if (IsEmpty) return false;
+                return true;
+            }
 
-            if (_currentNode.Previous == null) return false;
 
-            return true;
+            return _currentNode.Previous != null;
         }
 
-        public string? Previous()
+        public (string, string)? Previous()
         {
             if (_currentNode?.Previous == null)
                 return null;
@@ -328,13 +436,13 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
             return true;
         }
 
-        public bool SkipTo(string track)
+        public bool SkipTo(int index)
         {
-            var node = _trackList.Find(track);
-            if (node == null)
-                return false;
-
-            _currentNode = node;
+            // var node = _trackList.Find(track);
+            // if (node == null)
+            //     return false;
+            //
+            // _currentNode = node;
             return true;
         }
 
@@ -369,9 +477,22 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
                 _currentNode = _trackList.Find(_currentNode.Value);
         }
 
-        public IReadOnlyList<string> GetAllTracks()
+        public IReadOnlyList<(string name, string url)> GetAllTracks()
         {
             return _trackList.ToList().AsReadOnly();
+        }
+
+        public int GetTrackIndex(LinkedListNode<(string Title, string Url)> node)
+        {
+            var index = 1;
+            var current = _trackList.First;
+            while (current != null && current != node)
+            {
+                index++;
+                current = current.Next;
+            }
+
+            return index;
         }
     }
 }

@@ -1,6 +1,7 @@
 ﻿using DISCORD_BOT.injections;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using NetCord;
 using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using NetCord.Hosting.Services;
@@ -18,6 +19,16 @@ public class Program
         builder.Services
             .AddDiscordGateway(options =>
             {
+                options.Presence = new PresenceProperties(UserStatusType.Online)
+                {
+                    Activities =
+                    [
+                        new UserActivityProperties("Custom Status", UserActivityType.Custom)
+                        {
+                            State = "At your service. The greatest of all Shiba is here to attend to all your needs"
+                        }
+                    ]
+                };
                 options.Intents = GatewayIntents.GuildMessages
                                   | GatewayIntents.DirectMessages
                                   | GatewayIntents.MessageContent
@@ -25,7 +36,7 @@ public class Program
                                   | GatewayIntents.GuildMessageReactions
                                   | GatewayIntents.Guilds | GatewayIntents.GuildEmojisAndStickers
                                   | GatewayIntents.GuildVoiceStates;
-            }).AddGatewayHandlers(typeof(Program).Assembly).AddApplicationCommands()
+            }).AddGatewayHandlers(typeof(Program).Assembly).AddApplicationCommands().AddDiscordGateway()
             ;
         var host = builder.Build();
 

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using DISCORD_BOT;
 using DISCORD_BOT.injections;
 using NetCord;
@@ -56,48 +55,14 @@ public class Music(IVoiceStateService voiceStateService, MusicStream musicStream
 
         await RespondAsync(InteractionCallback.DeferredMessage());
 
-        async ValueTask<string> GetTitle(string value)
-        {
-            var ytdlp = new ProcessStartInfo("yt-dlp")
-            {
-                RedirectStandardError = true,
-                Arguments = $"--get-title {value}",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true
-            };
-
-
-            using var process = Process.Start(ytdlp);
-            var output = await process?.StandardOutput.ReadToEndAsync()!;
-
-            await process.WaitForExitAsync();
-
-            if (process.ExitCode != 0)
-            {
-                var error = await process.StandardError.ReadToEndAsync();
-                Console.WriteLine($"Process error: {error}");
-                throw new Exception(error);
-            }
-
-            return output;
-        }
-
 
         var allTracks = musicStream.MusicTracks().GetAllTracks();
+        var currentIndex = musicStream.CurrentIndex;
 
-        var fields = new List<(string name, string value)>();
-        foreach (var track in allTracks)
+        var array = allTracks.Select((item, index) => new EmbedFieldProperties
         {
-            var name = await GetTitle(track);
-            fields.Add((name, value: track));
-        }
-
-
-        var array = fields.Select((value, index) => new EmbedFieldProperties
-        {
-            Name = $"Track {index + 1} {value.name}",
-            Value = value.value.ToString()
+            Name = index == currentIndex - 1 ? $"{item.name} (Now Playing)" : item.name,
+            Value = item.url
         });
 
 
@@ -167,7 +132,7 @@ public class Music(IVoiceStateService voiceStateService, MusicStream musicStream
     {
         if (musicStream.MusicTracks().IsEmpty || musicStream.MusicTracks().HasNext() == false)
         {
-            await RespondAsync(InteractionCallback.Message("There is nothing to play! How dare you waste my time!"));
+            await RespondAsync(InteractionCallback.Message("There is nothing to play next!"));
             return;
         }
 
@@ -196,7 +161,13 @@ public class Music(IVoiceStateService voiceStateService, MusicStream musicStream
     {
         if (musicStream.MusicTracks().IsEmpty || musicStream.MusicTracks().HasPrevious() == false)
         {
-            await RespondAsync(InteractionCallback.Message("There is nothing to play! How dare you waste my time!"));
+            await RespondAsync(InteractionCallback.Message("There is nothing previously to play!"));
+            return;
+        }
+
+        if (musicStream.MusicTracks().HasNext() == false)
+        {
+            await RespondAsync(InteractionCallback.Message("There is no previous track!"));
             return;
         }
 
@@ -225,9 +196,16 @@ public class Music(IVoiceStateService voiceStateService, MusicStream musicStream
     [SlashCommand("stop", "Plays music", Contexts = [InteractionContextType.Guild])]
     public async Task StopAsync()
     {
-        await RespondAsync(InteractionCallback.Message("Stopping music!"));
-        //update perhaps message indicating success?
-        await musicStream.CloseAsync();
+        if (musicStream.Active)
+        {
+            await RespondAsync(InteractionCallback.Message("Stopping music..."));
+            await musicStream.CloseAsync();
+            await Context.Client.Rest.SendMessageAsync(Context.Channel.Id, "Music Stopped!");
+        }
+        else
+        {
+            await RespondAsync(InteractionCallback.Message("No music to stop!"));
+        }
     }
 
 
@@ -240,7 +218,10 @@ public class Music(IVoiceStateService voiceStateService, MusicStream musicStream
             return;
         }
 
+
         var guild = Context.Guild!;
+
+
         if (!guild.VoiceStates.TryGetValue(Context.User.Id, out var voiceState))
         {
             await RespondAsync(InteractionCallback.Message("You are not connected to any voice channel!"));
@@ -254,7 +235,6 @@ public class Music(IVoiceStateService voiceStateService, MusicStream musicStream
             voiceClient = await InitializeVoiceClient(client, guild.Id, voiceState);
         else
             voiceClient = voice;
-
 
         await RespondAsync(InteractionCallback.Message("I will now play you some melodies."));
         await musicStream.StartStream(voiceClient, guild.Id, Context.Channel.Id);
