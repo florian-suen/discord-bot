@@ -1,5 +1,6 @@
 using DISCORD_BOT;
 using DISCORD_BOT.injections;
+using Microsoft.Extensions.Options;
 using NetCord;
 using NetCord.Gateway;
 using NetCord.Gateway.Voice;
@@ -9,9 +10,10 @@ using NetCord.Services.ApplicationCommands;
 
 namespace Discord_Bot.commands;
 
-public class Music(IVoiceStateService voiceStateService, MusicStream musicStream)
+public class Music(IVoiceStateService voiceStateService, MusicStream musicStream, IOptions<AppConfig> config)
     : ApplicationCommandModule<ApplicationCommandContext>
 {
+    private readonly IOptions<AppConfig> _config = config;
     private readonly IVoiceStateService _voiceStateService = voiceStateService;
 
 
@@ -79,10 +81,11 @@ public class Music(IVoiceStateService voiceStateService, MusicStream musicStream
         await FollowupAsync(new InteractionMessageProperties { Embeds = [embed] });
     }
 
-
     [SlashCommand("add", "Add Track", Contexts = [InteractionContextType.Guild])]
     public async Task AddAsync(string track)
     {
+        var end = _config.Value.App.Ends;
+        var name = _config.Value.App.Name;
         if (!Uri.IsWellFormedUriString(track, UriKind.Absolute))
         {
             await RespondAsync(InteractionCallback.Message("Invalid track!"));
@@ -93,15 +96,18 @@ public class Music(IVoiceStateService voiceStateService, MusicStream musicStream
         var uri = new Uri(track);
         var host = uri.Host.ToLower();
 
+        var correctLink = false;
 
-        var isYoutube =
-            host.EndsWith("youtube.com") ||
-            host.EndsWith("youtu.be") ||
-            host.EndsWith("www.youtube.com");
-
-        if (!isYoutube)
+        foreach (var link in end)
         {
-            await RespondAsync(InteractionCallback.Message("I only accept YouTube links!"));
+            var isCorrectLink = host.EndsWith(link);
+            if (isCorrectLink) correctLink = true;
+        }
+
+
+        if (!correctLink)
+        {
+            await RespondAsync(InteractionCallback.Message($"I only accept {name} links!"));
             return;
         }
 

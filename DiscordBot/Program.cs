@@ -36,12 +36,24 @@ public class Program
                                   | GatewayIntents.GuildMessageReactions
                                   | GatewayIntents.Guilds | GatewayIntents.GuildEmojisAndStickers
                                   | GatewayIntents.GuildVoiceStates;
-            }).AddGatewayHandlers(typeof(Program).Assembly).AddApplicationCommands().AddDiscordGateway()
-            ;
+            }).AddGatewayHandlers(typeof(Program).Assembly).AddApplicationCommands().AddDiscordGateway();
+        builder.Services.Configure<AppConfig>(builder.Configuration);
         var host = builder.Build();
 
         host.AddModules(typeof(Program).Assembly);
         host.UseGatewayHandlers();
         await host.RunAsync();
     }
+}
+
+public class AppSettings
+{
+    public List<string> Ends { get; set; } = new();
+    public string Name { get; set; } = string.Empty;
+    public string Process { get; set; } = string.Empty;
+}
+
+public class AppConfig
+{
+    public AppSettings App { get; set; } = new();
 }

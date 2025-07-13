@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using Microsoft.Extensions.Options;
 using NetCord;
 using NetCord.Gateway;
 using NetCord.Gateway.Voice;
@@ -9,18 +10,24 @@ namespace DISCORD_BOT.injections;
 
 //currently only works for one guild one bot but ideally with guildId/dictionary for each guild instance
 //Update Music Stream to store guild ids for each process
-public class MusicStream(IVoiceStateService voiceStateService, RestClient restClient, GatewayClient gatewayClient)
+public class MusicStream(
+    IVoiceStateService voiceStateService,
+    RestClient restClient,
+    GatewayClient gatewayClient,
+    IOptions<AppConfig> config)
 {
-    private readonly MusicQueue _musicTrack = new();
+    private readonly IOptions<AppConfig> _config = config;
+    private readonly MusicQueue _musicTrack = new(config);
+
     public required bool Active;
     public required int? CurrentIndex;
+    public required Process? FetchProcess;
     public required Process? Ffmpeg;
     public required Stream? OutStream;
     public required CancellationTokenSource? Source;
     public required bool SpeakingState;
     public required OpusEncodeStream? Stream;
     public required CancellationToken Token;
-    public required Process? YtDlpProcess;
 
     public MusicQueue MusicTracks()
     {
@@ -109,7 +116,7 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
 
     public async Task<bool> CloseAsync()
     {
-        if (Active && Ffmpeg is not null && Stream is not null && YtDlpProcess is not null && OutStream is not null &&
+        if (Active && Ffmpeg is not null && Stream is not null && FetchProcess is not null && OutStream is not null &&
             Source is not null)
         {
             await Source.CancelAsync();
@@ -117,7 +124,7 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
             await Stream.DisposeAsync();
             Stream = null;
             await OutStream.FlushAsync();
-            await TerminateProcess(YtDlpProcess);
+            await TerminateProcess(FetchProcess);
             await TerminateProcess(Ffmpeg);
             Active = false;
             Source.Dispose();
@@ -198,21 +205,22 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
 
     private async Task<bool> _streamTask(string track)
     {
+        var name = _config.Value.App.Name;
         if (OutStream is null) return false;
         Stream = new OpusEncodeStream(OutStream, PcmFormat.Short, VoiceChannels.Stereo, OpusApplication.Audio);
-        ProcessStartInfo ytDlpStartInfo = new("yt-dlp")
+        ProcessStartInfo fetchStartInfo = new(name)
         {
             RedirectStandardOutput = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
 
-        ytDlpStartInfo.ArgumentList.Add("-f");
-        ytDlpStartInfo.ArgumentList.Add("bestaudio");
-        ytDlpStartInfo.ArgumentList.Add("-o");
-        ytDlpStartInfo.ArgumentList.Add("-");
-        ytDlpStartInfo.ArgumentList.Add("--no-playlist");
-        ytDlpStartInfo.ArgumentList.Add(track);
+        fetchStartInfo.ArgumentList.Add("-f");
+        fetchStartInfo.ArgumentList.Add("bestaudio");
+        fetchStartInfo.ArgumentList.Add("-o");
+        fetchStartInfo.ArgumentList.Add("-");
+        fetchStartInfo.ArgumentList.Add("--no-playlist");
+        fetchStartInfo.ArgumentList.Add(track);
 
 
         ProcessStartInfo startInfo = new("ffmpeg")
@@ -234,20 +242,20 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
         arguments.Add("pipe:1");
 
 
-        var newYtDlp = Process.Start(ytDlpStartInfo)! ??
-                       throw new InvalidOperationException("yt-dlp failed to start");
+        var newFetch = Process.Start(fetchStartInfo)! ??
+                       throw new InvalidOperationException($"{name} failed to start");
         var newFfmpeg = Process.Start(startInfo)! ??
                         throw new InvalidOperationException("ffmpeg failed to start");
 
 
-        YtDlpProcess = newYtDlp;
+        FetchProcess = newFetch;
 
         Ffmpeg = newFfmpeg;
 
 
         try
         {
-            var pipeTask = YtDlpProcess.StandardOutput.BaseStream.CopyToAsync(
+            var pipeTask = FetchProcess.StandardOutput.BaseStream.CopyToAsync(
                 Ffmpeg.StandardInput.BaseStream,
                 Token
             ).ContinueWith(async _ =>
@@ -293,56 +301,71 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
 
         return true;
     }
+}
+
+public class MusicQueue(IOptions<AppConfig> config)
+{
+    private readonly IOptions<AppConfig> _config = config;
+    private readonly Random _rng = new();
+    private readonly LinkedList<(string title, string url)> _trackList = new();
+
+    private LinkedListNode<(string title, string url)>? _currentNode;
 
 
-    public class MusicQueue
+    public (string title, string url)? Current => _currentNode?.Value;
+
+    public int CurrentIndex => _currentNode is null ? -1 : GetTrackIndex(_currentNode);
+
+    public bool IsEmpty => _trackList.Count == 0;
+    public int Count => _trackList.Count;
+
+
+    private async Task FetchModifyNodeTitle(string track, LinkedListNode<(string, string)> node)
     {
-        private readonly Random _rng = new();
-        private readonly LinkedList<(string title, string url)> _trackList = new();
-        private LinkedListNode<(string title, string url)>? _currentNode;
-
-
-        public (string title, string url)? Current => _currentNode?.Value;
-
-        public int CurrentIndex => _currentNode is null ? -1 : GetTrackIndex(_currentNode);
-
-        public bool IsEmpty => _trackList.Count == 0;
-        public int Count => _trackList.Count;
-
-
-        private async Task FetchModifyNodeTitle(string track, LinkedListNode<(string, string)> node)
+        var fetchName = _config.Value.App.Name;
+        var fetch = new ProcessStartInfo(fetchName)
         {
-            var ytdlp = new ProcessStartInfo("yt-dlp")
-            {
-                RedirectStandardError = true,
-                Arguments = $"--get-title {track}",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true
-            };
+            RedirectStandardError = true,
+            Arguments = $"--get-title {track}",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true
+        };
 
 
-            using var process = Process.Start(ytdlp);
-            var output = await process?.StandardOutput.ReadToEndAsync()!;
+        using var process = Process.Start(fetch);
+        var output = await process?.StandardOutput.ReadToEndAsync()!;
 
-            await process.WaitForExitAsync();
+        await process.WaitForExitAsync();
 
-            if (process.ExitCode != 0)
-            {
-                var error = await process.StandardError.ReadToEndAsync();
-                Console.WriteLine($"Process error: {error}");
-                throw new Exception(error);
-            }
-
-            ;
-
-            var index = GetTrackIndex(node);
-            var title = $"Track {index} - {output}";
-            node.Value = (title, track);
+        if (process.ExitCode != 0)
+        {
+            var error = await process.StandardError.ReadToEndAsync();
+            Console.WriteLine($"Process error: {error}");
+            throw new Exception(error);
         }
 
+        ;
 
-        public void Enqueue(string track)
+        var index = GetTrackIndex(node);
+        var title = $"Track {index} - {output}";
+        node.Value = (title, track);
+    }
+
+
+    public void Enqueue(string track)
+    {
+        var index = _trackList.Count + 1;
+        var title = $"Track {index} ...Loading";
+
+        var node = _trackList.AddLast((title, track));
+
+        _ = FetchModifyNodeTitle(track, node);
+    }
+
+    public void EnqueueRange(IEnumerable<string> tracks)
+    {
+        foreach (var track in tracks)
         {
             var index = _trackList.Count + 1;
             var title = $"Track {index} ...Loading";
@@ -351,170 +374,157 @@ public class MusicStream(IVoiceStateService voiceStateService, RestClient restCl
 
             _ = FetchModifyNodeTitle(track, node);
         }
+    }
 
-        public void EnqueueRange(IEnumerable<string> tracks)
+    public (string, string)? Next()
+    {
+        if (_currentNode == null)
         {
-            foreach (var track in tracks)
-            {
-                var index = _trackList.Count + 1;
-                var title = $"Track {index} ...Loading";
-
-                var node = _trackList.AddLast((title, track));
-
-                _ = FetchModifyNodeTitle(track, node);
-            }
+            _currentNode = _trackList.First;
+            return _currentNode?.Value;
         }
 
-        public (string, string)? Next()
+        if (_currentNode.Next == null) return null;
+
+        _currentNode = _currentNode.Next;
+
+        return _currentNode.Value;
+    }
+
+    public bool HasNext()
+    {
+        if (_currentNode == null)
         {
-            if (_currentNode == null)
-            {
-                _currentNode = _trackList.First;
-                return _currentNode?.Value;
-            }
-
-            if (_currentNode.Next == null) return null;
-
-            _currentNode = _currentNode.Next;
-
-            return _currentNode.Value;
-        }
-
-        public bool HasNext()
-        {
-            if (_currentNode == null)
-            {
-                if (IsEmpty) return false;
-                _currentNode = _trackList.First;
-                return true;
-            }
-
-            return _currentNode?.Next != null;
-        }
-
-
-        public bool HasPrevious()
-        {
-            if (_currentNode == null)
-            {
-                if (IsEmpty) return false;
-                return true;
-            }
-
-
-            return _currentNode.Previous != null;
-        }
-
-        public (string, string)? Previous()
-        {
-            if (_currentNode?.Previous == null)
-                return null;
-
-            _currentNode = _currentNode.Previous;
-
-            if (_currentNode.Previous is not null)
-            {
-                _currentNode = _currentNode.Previous;
-                return _currentNode?.Previous?.Value;
-            }
-
-            _currentNode = null;
-            return null;
-        }
-
-
-        public bool Remove(int index)
-        {
-            //One update to make is when title is still loading and someone removes in succession
-
-            try
-            {
-                if (index < 0 || index >= _trackList?.Count)
-                    return false;
-
-                var currentNode = _trackList?.First;
-
-                for (var i = 0; i < index; i++) currentNode = currentNode?.Next;
-
-                if (currentNode is not null) _trackList?.Remove(currentNode);
-
-                var newTrackNumber = 1;
-                var currentNodeToMutate = _trackList?.First;
-                while (currentNodeToMutate is not null)
-                {
-                    var splitName = currentNodeToMutate.Value.title.Split('-', 2)[1];
-                    var url = currentNodeToMutate.Value.url;
-                    currentNodeToMutate.Value = ($"Track {newTrackNumber} - {splitName}", url);
-                    newTrackNumber++;
-                    currentNodeToMutate = currentNodeToMutate.Next;
-                }
-
-                return true;
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"Error Removing - {e.Message}");
-                return false;
-            }
-        }
-
-        public bool SkipTo(int index)
-        {
-            // var node = _trackList.Find(track);
-            // if (node == null)
-            //     return false;
-            //
-            // _currentNode = node;
+            if (IsEmpty) return false;
+            _currentNode = _trackList.First;
             return true;
         }
 
-        public void Clear()
+        return _currentNode?.Next != null;
+    }
+
+
+    public bool HasPrevious()
+    {
+        if (_currentNode == null)
         {
-            _trackList.Clear();
-            _currentNode = null;
+            if (IsEmpty) return false;
+            return true;
         }
 
 
-        public void Shuffle()
+        return _currentNode.Previous != null;
+    }
+
+    public (string, string)? Previous()
+    {
+        if (_currentNode?.Previous == null)
+            return null;
+
+        _currentNode = _currentNode.Previous;
+
+        if (_currentNode.Previous is not null)
         {
-            if (_trackList.Count <= 1)
-                return;
+            _currentNode = _currentNode.Previous;
+            return _currentNode?.Previous?.Value;
+        }
 
-            var list = _trackList.ToList();
-            var n = list.Count;
+        _currentNode = null;
+        return null;
+    }
 
-            while (n > 1)
+
+    public bool Remove(int index)
+    {
+        //One update to make is when title is still loading and someone removes in succession
+
+        try
+        {
+            if (index < 0 || index >= _trackList?.Count)
+                return false;
+
+            var currentNode = _trackList?.First;
+
+            for (var i = 0; i < index; i++) currentNode = currentNode?.Next;
+
+            if (currentNode is not null) _trackList?.Remove(currentNode);
+
+            var newTrackNumber = 1;
+            var currentNodeToMutate = _trackList?.First;
+            while (currentNodeToMutate is not null)
             {
-                n--;
-                var k = _rng.Next(n + 1);
-                (list[n], list[k]) = (list[k], list[n]);
+                var splitName = currentNodeToMutate.Value.title.Split('-', 2)[1];
+                var url = currentNodeToMutate.Value.url;
+                currentNodeToMutate.Value = ($"Track {newTrackNumber} - {splitName}", url);
+                newTrackNumber++;
+                currentNodeToMutate = currentNodeToMutate.Next;
             }
 
-            _trackList.Clear();
-            foreach (var track in list)
-                _trackList.AddLast(track);
-
-
-            if (_currentNode != null)
-                _currentNode = _trackList.Find(_currentNode.Value);
+            return true;
         }
-
-        public IReadOnlyList<(string name, string url)> GetAllTracks()
+        catch (Exception e)
         {
-            return _trackList.ToList().AsReadOnly();
+            Console.WriteLine($"Error Removing - {e.Message}");
+            return false;
         }
+    }
 
-        public int GetTrackIndex(LinkedListNode<(string Title, string Url)> node)
+    public bool SkipTo(int index)
+    {
+        // var node = _trackList.Find(track);
+        // if (node == null)
+        //     return false;
+        //
+        // _currentNode = node;
+        return true;
+    }
+
+    public void Clear()
+    {
+        _trackList.Clear();
+        _currentNode = null;
+    }
+
+
+    public void Shuffle()
+    {
+        if (_trackList.Count <= 1)
+            return;
+
+        var list = _trackList.ToList();
+        var n = list.Count;
+
+        while (n > 1)
         {
-            var index = 1;
-            var current = _trackList.First;
-            while (current != null && current != node)
-            {
-                index++;
-                current = current.Next;
-            }
-
-            return index;
+            n--;
+            var k = _rng.Next(n + 1);
+            (list[n], list[k]) = (list[k], list[n]);
         }
+
+        _trackList.Clear();
+        foreach (var track in list)
+            _trackList.AddLast(track);
+
+
+        if (_currentNode != null)
+            _currentNode = _trackList.Find(_currentNode.Value);
+    }
+
+    public IReadOnlyList<(string name, string url)> GetAllTracks()
+    {
+        return _trackList.ToList().AsReadOnly();
+    }
+
+    public int GetTrackIndex(LinkedListNode<(string Title, string Url)> node)
+    {
+        var index = 1;
+        var current = _trackList.First;
+        while (current != null && current != node)
+        {
+            index++;
+            current = current.Next;
+        }
+
+        return index;
     }
 }
