@@ -14,6 +14,7 @@ public class Program
     private static async Task Main(string[] args)
     {
         var builder = Host.CreateApplicationBuilder(args);
+        //builder.Services.AddHostedService<Announcements>();
         builder.Services.AddSingleton<IVoiceStateService, VoiceStateService>();
         builder.Services.AddSingleton<MusicStream>();
         builder.Services
